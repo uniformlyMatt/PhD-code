@@ -25,6 +25,12 @@ def covariance(design: np.ndarray, biased=False):
     return np.dot(design, design.T)*np.true_divide(1, factor)
 
 
+def pca(cov_matrix: np.ndarray):
+    """ Accepts a covariance matrix and returns the principal components """
+
+    pass
+
+
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
     n = 5
