@@ -1,5 +1,7 @@
 import numpy as np
 from numpy import ndarray
+import numpy.linalg as LA
+import collections
 
 
 def design_matrix(n_obs: int) -> np.ndarray:
@@ -22,13 +24,14 @@ def covariance(design: np.ndarray, biased=False):
     if biased:
         factor += 1
 
-    return np.dot(design, design.T)*np.true_divide(1, factor)
+    return np.dot(design, design.T) * np.true_divide(1, factor)
 
 
 def pca(cov_matrix: np.ndarray):
     """ Accepts a covariance matrix and returns the principal components """
 
-    pass
+    eigenvectors, eigenvalues = LA.eig(cov_matrix)
+    return eigenvectors, eigenvalues
 
 
 # Press the green button in the gutter to run the script.
@@ -36,3 +39,6 @@ if __name__ == '__main__':
     n = 5
     x: ndarray = design_matrix(n)
     cov = covariance(x)
+    e1, e2 = pca(cov)
+    print(e1)
+    print(e2)
