@@ -1,6 +1,6 @@
 import numpy as np
 from numpy import ndarray
-import numpy.linalg as LA
+from numpy.linalg import eig
 import collections
 
 
@@ -30,7 +30,7 @@ def covariance(design: np.ndarray, biased=False):
 def pca(cov_matrix: np.ndarray):
     """ Accepts a covariance matrix and returns the principal components """
 
-    eigenvectors, eigenvalues = LA.eig(cov_matrix)
+    eigenvectors, eigenvalues = eig(cov_matrix)
     return eigenvectors, eigenvalues
 
 
