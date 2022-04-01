@@ -27,10 +27,6 @@ B2 = np.random.randn(p, q)
 g1 = np.random.rand()
 g2 = np.random.rand()
 
-# the qth standard basis vector for R^q
-eq = np.zeros(q)
-eq[-1] = 1.
-
 # I want the observations to be 1xp arrays for later computations
 Y = [yi.reshape(1, -1) for yi in Y.T]
 
@@ -99,8 +95,8 @@ def compute_terms(Y, latent_means, latent_Sigmas, B1, B2, mu, g1, g2):
 
     return a1, a2, a3, a4, a5
 
-def compute_gradient(Y, mi, latent_Sigmas, B1, B2, ss, mu, g1, g2, sigma2):
-    """ Compute the derivative of the loglikelihood wrt the latent means. """
+def compute_gradient(Y, mi, latent_Sigmas, B1, B2, ss, mu, g1, g2, sigma2, index):
+    """ Compute the derivative of the loglikelihood wrt a single latent mean. """
 
     # these are the 's' parameters when nu=e_q, beta=0
     si = -mi[-1]*ss[index][-1]
@@ -177,7 +173,8 @@ def loglikelihood(mean, grad):
             mu=mu,
             g1=g1,
             g2=g2,
-            sigma2=sigma2
+            sigma2=sigma2,
+            index=index
         )
 
     a1, a2, a3, a4, a5 = compute_terms(
@@ -223,7 +220,7 @@ opt.set_max_objective(loglikelihood)
 # opt.add_inequality_constraint(lambda x, grad: myconstraint(x,grad,2,0), 1e-8)
 # opt.add_inequality_constraint(lambda x, grad: myconstraint(x,grad,-1,1), 1e-8)
 
-opt.set_xtol_rel(1e-1)
+opt.set_xtol_rel(1e-4)
 
 x = []
 
@@ -236,6 +233,7 @@ for index in range(N):
     x.append(xi)
     
     # update the latent means with the new optimum
+    print(mi)
     latent_means[index] = xi.reshape(-1, 1)
     print('Maximum value: {}'.format(opt.last_optimum_value()))
     print('Optimum at {}\n'.format(xi))
