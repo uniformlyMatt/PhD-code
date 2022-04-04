@@ -24,8 +24,8 @@ sigma2 = np.random.rand()       # set to random positive number
 B1 = np.random.randn(p, q)
 B2 = np.random.randn(p, q)
 
-g1 = np.random.rand()
-g2 = np.random.rand()
+g1 = 1.
+g2 = 1.
 
 # I want the observations to be 1xp arrays for later computations
 Y = [yi.reshape(1, -1) for yi in Y.T]
