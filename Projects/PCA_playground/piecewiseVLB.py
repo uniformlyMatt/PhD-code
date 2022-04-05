@@ -8,24 +8,23 @@ import nlopt
 from alive_progress import alive_bar
 
 class Problem:
-    """ I'm trying to pass multiple variables to the NLOPT object, which only wants one 
-        input variable.
-    """
-
-    def __init__(self, latent_dimension=2, timeout=15):
+    def __init__(self, n_obs, latent_dimension=2, timeout=15, tolerance=1e-2):
         self.q = latent_dimension
-        self.N = 11  # number of observations
+        self.N = n_obs  # number of observations
         self.timeout = timeout
 
+        # define step size for gradient ascent
+        self.step_size = 0.01
+
         # setup the observations
-        self.obs = Helix(radius=2, slope=1, num_points=self.N).coords.T
+        self.obs = Helix(radius=5, slope=2, num_points=self.N).coords.T
 
         self.p = self.obs.shape[0]   # dimension of the observation space
         
-        self.tolerance = 1e-5   # tolerance for the loglikelihood in the EM algorithm
+        self.tolerance = tolerance   # tolerance for the loglikelihood in the EM algorithm
 
         # initialize a set of means and standard deviations for the latent variables
-        self.latent_means = [np.random.randn(self.q, 1) for _ in range(self.N)]
+        self.latent_means = [np.random.randn(self.q, 1)**2 for _ in range(self.N)]
         self.latent_variances = [np.abs(np.random.randn(self.q))+1 for _ in range(self.N)]
         self.latent_Sigmas = [np.diag(var) for var in self.latent_variances]
 
@@ -34,7 +33,7 @@ class Problem:
 
         # set starting values for sigma2, mu, B_1, B_2, g_1, and g_2
         self.mu = np.mean(self.obs, axis=1).reshape(1, -1) # the optimal value for mu is the empirical mean of the data
-        self.sigma2 = np.random.rand()+1       # set to random positive number
+        self.sigma2 = np.random.rand()       # set to random positive number
         self.B1 = np.random.randn(self.p, self.q)
         self.B2 = np.random.randn(self.p, self.q)
 
@@ -63,9 +62,10 @@ class Problem:
         self.opt_Sigmas.set_max_objective(self.LL_Sigma)
 
         # constrain covariance matrices to be diagonal
-        lower_bounds_diag = -float('inf')*np.ones(self.q)
+        # lower_bounds_diag = -float('inf')*np.ones(self.q)
         upper_bounds_diag = float('inf')*np.ones(self.q)
-        lower_bounds = np.diag(lower_bounds_diag).ravel()
+        # lower_bounds = np.diag(lower_bounds_diag).ravel()
+        lower_bounds = np.zeros(self.q**2)
         upper_bounds = np.diag(upper_bounds_diag).ravel()
 
         self.opt_Sigmas.set_lower_bounds(lower_bounds)
@@ -73,6 +73,18 @@ class Problem:
 
         # set a timeout for the optimization
         self.opt_Sigmas.set_maxtime(maxtime=self.timeout)
+
+    def __str__(self):
+        """ Overloading the print function. This presents an informative 
+            string display when the object is printed.
+        """
+        result = "\nPiecewise Linear Probabilistic PCA\n"
+        result += '='*(len(result)-2) + '\n\n'
+
+        result += 'Model parameters\n\n'
+        result += 'Number of observations: {}\nData dimensions: {}\nLatent dimensions: {}\n'.format(self.N, self.p, self.q)
+
+        return result
 
     def loglikelihood(self):
         """ Compute the log-likelihood function.
@@ -87,7 +99,9 @@ class Problem:
         determinants = [np.prod(np.diag(Sigma)) for Sigma in self.latent_Sigmas]
         traces = [np.trace(Sigma) for Sigma in self.latent_Sigmas]
 
-        a1 = [-tr - np.matmul(mi.T, mi) + np.log(det) for tr, det, mi in zip(traces, determinants, self.latent_means)]
+        miTmi = [sum(mi**2)**2 for mi in self.latent_means]
+
+        a1 = [-tr - mi_norm + np.log(det) for tr, det, mi_norm in zip(traces, determinants, miTmi)]
 
         B_times_mean = [np.matmul(self.B1+self.B2, mi) for mi in self.latent_means]
         self.a2 = [
@@ -371,8 +385,53 @@ class Problem:
         self.B1 = 1/(2*(TWOPI)**(1/2-self.q))*np.matmul(y_minus_mu_mi, inverted_part_B1)
         self.B2 = 1/(2*(TWOPI)**(1/2-self.q))*np.matmul(y_minus_mu_mi, inverted_part_B2)
 
-        self.optimize_means()
-        self.optimize_Sigma()
+        # optimize latent parameters using Method of Moving Asymptotes
+        # self.optimize_means()
+        # self.optimize_Sigma()
+
+        # optimize latent parameters using gradient ascent
+        # TODO: get progress bar working for gradient ascent
+        for index, (mi, Si) in enumerate(zip(self.latent_means, self.latent_Sigmas)):
+            self.index = index
+
+            loglik_old = self.LL_mean(mi, gradient_mean=np.empty((0, 0)))
+
+            mi_old = mi.flatten()
+            mi_new  = mi_old - self.step_size*self.gradient_wrt_latent_mean(mi_old)
+
+            loglik_new = self.LL_mean(mi_new, gradient_mean=np.empty(0))
+            
+            # update until absolute error is less than tolerance
+            while np.abs(loglik_old-loglik_new) > self.tolerance:
+                mi_old = mi_new
+                loglik_old = loglik_new
+
+                mi_new = mi_old - self.step_size*self.gradient_wrt_latent_mean(mi_old)
+                loglik_new = self.LL_mean(mi_new, gradient_mean=np.empty(0))
+
+                # decrease the step size when we're getting close to a solution
+                if np.abs(loglik_old-loglik_new) < 2*self.tolerance:
+                    self.step_size *= .5
+                
+            # update the latent means with new optimum
+            self.latent_means[index] = mi_new.reshape(-1, 1)
+
+            # now work on the latent Sigmas
+            loglik_old = self.LL_Sigma(Si, gradient_Sigma=np.empty(0))
+
+            Si_old = Si.flatten()
+            Si_new = Si_old - self.step_size*self.gradient_wrt_latent_Sigma(Si_old)
+
+            while np.abs(loglik_old-loglik_new) > self.tolerance:
+                Si_old = Si_new
+                loglik_old = loglik_new
+
+                Si_new = Si_old - self.step_size*self.gradient_wrt_latent_Sigma(Si_old)
+                loglik_new = self.LL_Sigma(Si_new, gradient_Sigma=np.empty(0))
+
+            # update latent Sigmas with new optimum
+            self.latent_Sigmas[index] = np.diag(np.diag(Si_new.reshape(self.q, self.q))) # this zeros all off-diagonal elements
+            # self.latent_Sigmas[index] = Si_new.reshape(self.q, self.q)
 
     def optimize_model(self):
         """ Perform the EM algorithm over the model parameters B1, B2, and sigma2 """
@@ -393,12 +452,12 @@ class Problem:
 
 if __name__ == '__main__':
     
-    p = Problem(latent_dimension=2)
-
-    # TODO: take only one iteration with the MMA algorithm during the M-step
-
-    # TODO: add a constraint to the latent covariance matrices so that together they equal the identity
+    p = Problem(n_obs=21, latent_dimension=2, tolerance=1e-2)  
     
+    print(p)
     p.optimize_model()
     # p.optimize_means()
     # p.optimize_Sigma()
+    
+    print(p.latent_Sigmas[1])
+    print(p.latent_means[1])
