@@ -1,14 +1,14 @@
-from re import S
 import numpy as np
 import numpy.linalg as LA
 from scipy.special import erf, erfc
 from helix import Helix
+from hinge import Hinge
 from config import *
 import nlopt
 from alive_progress import alive_bar
 
 class Problem:
-    def __init__(self, n_obs, latent_dimension=2, timeout=15, tolerance=1e-2):
+    def __init__(self, n_obs, data_type='helix', latent_dimension=2, timeout=15, tolerance=1e-2):
         self.q = latent_dimension
         self.N = n_obs  # number of observations
         self.timeout = timeout
@@ -17,7 +17,14 @@ class Problem:
         self.step_size = 0.01
 
         # setup the observations
-        self.obs = Helix(radius=5, slope=2, num_points=self.N).coords.T
+        if data_type == 'helix':
+            self.obs = Helix(radius=5, slope=2, num_points=self.N)
+            
+        elif data_type == 'hinge':
+            self.obs = Hinge(n_obs=self.N, mean=[1, 1], cov=np.diag(np.random.randn(2)**2))
+
+        self.obs.rotate(alpha=15., beta=15., gamma=15.)
+        self.obs = self.obs.coords.T
 
         self.p = self.obs.shape[0]   # dimension of the observation space
         
@@ -74,6 +81,9 @@ class Problem:
         # set a timeout for the optimization
         self.opt_Sigmas.set_maxtime(maxtime=self.timeout)
 
+        # calculate the current loglikelihood
+        self.loglik = self.loglikelihood()
+
     def __str__(self):
         """ Overloading the print function. This presents an informative 
             string display when the object is printed.
@@ -83,6 +93,7 @@ class Problem:
 
         result += 'Model parameters\n\n'
         result += 'Number of observations: {}\nData dimensions: {}\nLatent dimensions: {}\n'.format(self.N, self.p, self.q)
+        result += 'Initial Log-likelihood: {}'.format(self.loglik)
 
         return result
 
@@ -448,16 +459,28 @@ class Problem:
             self.M_step()
             
             L_new = self.loglikelihood()
+
+        self.loglik = L_new
         print('Optimal parameters reached.')
+        print('Log-likelihood at the optimum: {}'.format(self.loglik))
+        
+    def get_result(self):
+        """ Estimate the positions of the latent variables """
+
+        M_tilde_1 = np.stack([mi.T for mi in self.latent_means if mi[-1] >= 0])
+        M_tilde_2 = np.stack([mi.T for mi in self.latent_means if mi[-1] < 0])
+
+        print(M_tilde_1.shape, M_tilde_2.shape)
 
 if __name__ == '__main__':
     
-    p = Problem(n_obs=21, latent_dimension=2, tolerance=1e-2)  
+    p = Problem(n_obs=31, data_type='helix', latent_dimension=1, tolerance=1e-2)  
     
     print(p)
     p.optimize_model()
     # p.optimize_means()
     # p.optimize_Sigma()
     
-    print(p.latent_Sigmas[1])
-    print(p.latent_means[1])
+    # print(p.latent_Sigmas[1])
+    # print(p.latent_means[1])
+    p.get_result()
