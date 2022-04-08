@@ -1,11 +1,11 @@
 import numpy as np
 import numpy.linalg as LA
 from scipy.special import erf, erfc
-from helix import Helix
-from hinge import Hinge
+from demodata import DemoData
 from config import *
 import nlopt
 from alive_progress import alive_bar
+import matplotlib.pyplot as plt
 
 class Problem:
     def __init__(self, n_obs, data_type='helix', latent_dimension=2, timeout=15, tolerance=1e-2):
@@ -18,13 +18,23 @@ class Problem:
 
         # setup the observations
         if data_type == 'helix':
-            self.obs = Helix(radius=5, slope=2, num_points=self.N)
+            self.obs = DemoData(kind='helix', n_obs=self.N, mean=None, covariance=1.1)
             
         elif data_type == 'hinge':
-            self.obs = Hinge(n_obs=self.N, mean=[1, 1], cov=np.diag(np.random.randn(2)**2))
+            cov = np.diag(np.random.randn(2)**2)
+            self.obs = DemoData(kind='hinge', n_obs=self.N, mean=[0, 0], covariance=cov)
 
-        self.obs.rotate(alpha=15., beta=15., gamma=15.)
-        self.obs = self.obs.coords.T
+        elif data_type == 'mixture':
+            cov = np.diag(np.random.randn(2)**2)
+            self.obs = DemoData(kind='mixture', n_obs=self.N, mean=[0, 0], covariance=cov)
+
+        # apply rotation in 3D
+        # TODO: make alpha, beta, gamma parameters for the rotation
+        self.obs.rotate()
+
+        # get the coordinates from the object
+        self.coords = self.obs.coords
+        self.obs = self.coords.T
 
         self.p = self.obs.shape[0]   # dimension of the observation space
         
@@ -470,17 +480,48 @@ class Problem:
         M_tilde_1 = np.stack([mi.T for mi in self.latent_means if mi[-1] >= 0])
         M_tilde_2 = np.stack([mi.T for mi in self.latent_means if mi[-1] < 0])
 
-        print(M_tilde_1.shape, M_tilde_2.shape)
+        self.W1 = [np.matmul(mi, self.B1.T) for mi in M_tilde_1]
+        self.W2 = [np.matmul(mi, self.B2.T) for mi in M_tilde_2]
+
+    def plot_result(self):
+        """ Plot the latent means transformed through B1 and B2 """
+
+        self.ax = plt.axes(projection='3d')       
+
+        # extract the individual axis coordinates
+        self.x = self.coords[:, 0]
+        self.y = self.coords[:, 1]
+        self.z = self.coords[:, 2]
+
+        # first plot the latent points in Omega_plus
+        self.ax.scatter3D(self.x, self.y, self.z, color='red')
+
+        # plot the latent points in Omega_minus
+        self.result_x1 = [row[:, 0] for row in self.W1]
+        self.result_y1 = [row[:, 1] for row in self.W1]
+        self.result_z1 = [row[:, 2] for row in self.W1]
+
+        self.result_x2 = [row[:, 0] for row in self.W2]
+        self.result_y2 = [row[:, 1] for row in self.W2]
+        self.result_z2 = [row[:, 2] for row in self.W2]
+        self.ax.scatter3D(self.result_x1, self.result_y1, self.result_z1, color='blue')
+        self.ax.scatter3D(self.result_x2, self.result_y2, self.result_z2, color='black')
+
+        plt.show()
 
 if __name__ == '__main__':
     
-    p = Problem(n_obs=31, data_type='helix', latent_dimension=1, tolerance=1e-2)  
+    p = Problem(n_obs=33, data_type='mixture', latent_dimension=2, tolerance=1e-2)  
     
     print(p)
-    p.optimize_model()
-    # p.optimize_means()
-    # p.optimize_Sigma()
     
-    # print(p.latent_Sigmas[1])
-    # print(p.latent_means[1])
+    p.optimize_model()
+    # # p.optimize_means()
+    # # p.optimize_Sigma()
+    
+    # # print(p.latent_Sigmas[1])
+    # # print(p.latent_means[1])
     p.get_result()
+    print(p.W1)
+    print(p.W2)
+    p.plot_result()
