@@ -11,13 +11,22 @@ class DemoData:
         self.covariance = covariance
 
         # construct the rotation matrix
-        self.rotation_matrix = [
-            [np.cos(beta)*np.cos(gamma), np.sin(alpha)*np.sin(beta)*np.cos(gamma)-np.cos(alpha)*np.sin(gamma), np.cos(alpha)*np.sin(beta)*np.cos(gamma)+np.sin(alpha)*np.sin(gamma)],
-            [np.cos(beta)*np.sin(gamma), np.sin(alpha)*np.sin(beta)*np.cos(gamma)+np.cos(alpha)*np.sin(gamma), np.cos(alpha)*np.sin(beta)*np.cos(gamma)-np.sin(alpha)*np.sin(gamma)],
-            [-np.sin(beta), np.sin(alpha)*np.cos(beta), np.cos(alpha)*np.cos(beta)]
-        ]
+        # self.rotation_matrix = [
+        #     [np.cos(beta)*np.cos(gamma), np.sin(alpha)*np.sin(beta)*np.cos(gamma)-np.cos(alpha)*np.sin(gamma), np.cos(alpha)*np.sin(beta)*np.cos(gamma)+np.sin(alpha)*np.sin(gamma)],
+        #     [np.cos(beta)*np.sin(gamma), np.sin(alpha)*np.sin(beta)*np.cos(gamma)+np.cos(alpha)*np.sin(gamma), np.cos(alpha)*np.sin(beta)*np.cos(gamma)-np.sin(alpha)*np.sin(gamma)],
+        #     [-np.sin(beta), np.sin(alpha)*np.cos(beta), np.cos(alpha)*np.cos(beta)]
+        # ]
+        # self.rotation_matrix = [
+        #     [np.cos(beta)*np.cos(alpha), np.cos(beta)*np.sin(alpha), np.sin(beta)],
+        #     [-np.cos(gamma)*np.sin(alpha), np.cos(gamma)*np.cos(alpha), 0],
+        #     [np.sin(gamma)*np.sin(alpha)-np.cos(gamma)*np.sin(beta)*np.cos(alpha), -np.sin(gamma)*np.cos(alpha)-np.cos(gamma)*np.sin(beta)*np.sin(alpha), np.cos(gamma)*np.cos(beta)]
+        # ]
+        # self.rotation_vector = np.random.rand(3)
+        self.rotation_vector = np.random.randint(low=0, high=3, size=3)
+        self.axis = self.rotation_vector/np.linalg.norm(self.rotation_vector)
 
-        self.rotation = Rotation.from_matrix(self.rotation_matrix)
+        # self.rotation = Rotation.from_matrix(self.rotation_matrix)
+        self.rotation = Rotation.from_rotvec(beta*self.axis)
 
         assert self.kind in ['hinge', 'helix', 'mixture']
 
@@ -45,10 +54,10 @@ class DemoData:
 
             # the points along the helix are distributed uniformly along the helix, 
             # but Gaussian in the cross-section (only x and y need to be Gaussian distributed)
-            self.t = np.linspace(0, 6*np.pi, self.n_obs)
-            self.x = radius*np.cos(self.t) + np.random.normal(0, scale=var, size=n_obs)
-            self.y = radius*np.sin(self.t) + np.random.normal(0, scale=var, size=n_obs)
-            self.z = slope*self.t
+            self.t = np.linspace(-3*np.pi, 3*np.pi, self.n_obs)
+            self.x = radius*np.cos(self.t) + np.random.normal(0, scale=var, size=self.n_obs)
+            self.y = radius*np.sin(self.t) + np.random.normal(0, scale=var, size=self.n_obs)
+            self.z = slope*self.t + np.random.rand(self.n_obs)
 
             # need this for applying a rotation
             self.coords = np.array([np.array([i, j, k]) for i, j, k in zip(self.x, self.y, self.z)])
@@ -110,6 +119,10 @@ if __name__ == '__main__':
     hinge = DemoData(kind='hinge', n_obs=101, mean=[0, 0], covariance=cov)
     planes = DemoData(kind='mixture', n_obs=101, mean=[1, 0], covariance=cov)
 
-    helix.plot()
-    hinge.plot()
+    # helix.rotate()
+    # hinge.rotate()
+    planes.rotate()
+
+    # helix.plot()
+    # hinge.plot()
     planes.plot()

@@ -41,7 +41,7 @@ class Problem:
         self.tolerance = tolerance   # tolerance for the loglikelihood in the EM algorithm
 
         # initialize a set of means and standard deviations for the latent variables
-        self.latent_means = [np.random.randn(self.q, 1)**2 for _ in range(self.N)]
+        self.latent_means = [np.random.randn(self.q, 1) for _ in range(self.N)]
         self.latent_variances = [np.abs(np.random.randn(self.q))+1 for _ in range(self.N)]
         self.latent_Sigmas = [np.diag(var) for var in self.latent_variances]
 
@@ -53,6 +53,10 @@ class Problem:
         self.sigma2 = np.random.rand()       # set to random positive number
         self.B1 = np.random.randn(self.p, self.q)
         self.B2 = np.random.randn(self.p, self.q)
+
+        # indexes that correspond to the two separate subsets of the latent data
+        self.I1 = [index for index, mi in enumerate(self.latent_means) if mi[-1] >= 0]
+        self.I2 = [index for index, mi in enumerate(self.latent_means) if mi[-1] < 0]
 
         # these are nuisances; set them to 1 for now
         self.g1 = 1
@@ -109,7 +113,7 @@ class Problem:
 
     def loglikelihood(self):
         """ Compute the log-likelihood function.
-            Compute the long summation terms for the log-likelihood. 
+            Compute the summation terms for the log-likelihood. 
         """
         # update the latent variances based on the updated latent covariances matrices
         self.latent_variances = [np.diag(Si) for Si in self.latent_Sigmas]
@@ -117,75 +121,85 @@ class Problem:
         # these are the 's' parameters when nu=e_q, beta=0
         ss = [-mi[-1]*np.sqrt(si[-1]) for mi, si in zip(self.latent_means, self.latent_variances)]
 
+        # add up the terms that are valid over the entire index 1 <= i <= N
         determinants = [np.prod(np.diag(Sigma)) for Sigma in self.latent_Sigmas]
         traces = [np.trace(Sigma) for Sigma in self.latent_Sigmas]
-
         miTmi = [sum(mi**2)**2 for mi in self.latent_means]
+        yi_minus_mu_quadratic = [np.sum(yi-self.mu)**2/self.sigma2 for yi in self.coords]
 
-        a1 = [-tr - mi_norm + np.log(det) for tr, det, mi_norm in zip(traces, determinants, miTmi)]
+        global_terms = [0.5*(-tr - mi_norm + np.log(det) + y_quad) for tr, det, mi_norm, y_quad in zip(traces, determinants, miTmi, yi_minus_mu_quadratic)]
 
-        B_times_mean = [np.matmul(self.B1+self.B2, mi) for mi in self.latent_means]
-        self.a2 = [
-            np.matmul(
-                yi - self.mu, 
-                (yi - self.mu).T
-            ).item() - np.matmul(
-                yi - self.mu, 
-                Bm
-            ).item() for yi, Bm in zip(self.Y, B_times_mean)
-        ]
+        # now for the terms in Omega_plus
+        # update the index sets
+        self.I1 = [index for index, mi in enumerate(self.latent_means) if mi[-1] >= 0]
+        self.I2 = [index for index, mi in enumerate(self.latent_means) if mi[-1] < 0]
 
-        a3_scalars = [SQRT_PI_OVER_2*erfc(si/ROOT2)+si*np.exp(-si**2/2) for si in ss]
-        a3 = [
-            self.g1*sc*np.trace(
-                np.matmul(
-                    self.B1.T, 
-                    np.matmul(self.B1, Sigma)
-                )
-            ).item() for Sigma, sc in zip(self.latent_Sigmas, a3_scalars)
-        ]
+        def get_omega_terms(plus=True):
+            """ Compute the summation terms over Omega plus or Omega minus """
+            if plus:
+                B =  self.B1    
+                g = self.g1
+                error_func = lambda x: erfc(x)
+                exp_func = lambda x: np.exp(x)
+                index_set = self.I1
 
-        a4_scalars = [SQRT_PI_OVER_2*(erf(si/ROOT2)+1)-si*np.exp(-si**2/2) for si in ss]
-        a4 = np.array([
-            self.g2*sc*np.trace(
-                np.matmul(
-                    self.B2.T, 
+            else:
+                B = self.B2
+                g = self.g2
+                error_func = lambda x: erf(x) + 1
+                exp_func = lambda x: -np.exp(x)
+                index_set = self.I2
+
+            BTB = np.matmul(B.T, B)
+
+            _yi_terms = [
+                -2*np.matmul(
                     np.matmul(
-                        self.B2, 
-                        Sigma
+                        self.coords[index]-self.mu,
+                        B
+                    ),
+                    self.latent_means[index]
+                ) for index in index_set
+            ]
+            _g_terms = [
+                g*(SQRT_PI_OVER_2*error_func(ss[index]/ROOT2) + ss[index]*exp_func(-ss[index]**2/2)) for index in index_set
+            ]
+            _trace_terms = [
+                np.trace(
+                    np.matmul(
+                        BTB,
+                        self.latent_Sigmas[index]
                     )
+                ) for index in index_set
+            ]
+            _quadratic_terms = [
+                np.matmul(
+                    self.latent_means[index].T,
+                    np.matmul(
+                        BTB,
+                        self.latent_means[index]
+                    )
+                )*SQRT_PI_OVER_2*error_func(ss[index]/ROOT2) for index in index_set
+            ]
+            _terms = [
+                item1 + TWOPI**(0.5-self.q)*(item2*item3 + item4) for item1, item2, item3, item4 in zip(
+                    _yi_terms,
+                    _g_terms,
+                    _trace_terms,
+                    _quadratic_terms
                 )
-            ).item() for Sigma, sc in zip(self.latent_Sigmas, a4_scalars)
-        ],
-        dtype='object'
-        )
+            ]
 
-        a5_inner = [
-            erfc(si/ROOT2)*np.matmul(
-                self.B1.T, 
-                self.B1
-            ) + (erf(si/ROOT2)+1)*np.matmul(
-                self.B2.T, 
-                self.B2
-            ) for si in ss]
-        a5 = [
-            SQRT_PI_OVER_2*np.matmul(mi.T, np.matmul(Bi, mi)) for mi, Bi in zip(self.latent_means, a5_inner)
-        ]
+            return _terms
 
-        # convert all list of 1d arrays to lists of floats
-        self.a1 = [element.item()*0.5 for element in a1]
-        self.a3 = [element.item() for element in a3]
-        self.a4 = [element.item() for element in a4]
-        self.a5 = [element.item() for element in a5]
+        self.omega_plus_terms = get_omega_terms(plus=True)
+        self.omega_minus_terms = get_omega_terms(plus=False)
 
+        # finally, compute the scalars that are independent of the data and latent variables
         scalars = self.N*self.q/2 - self.N*self.p/2*np.log(TWOPI*self.sigma2)
 
-        total = sum(
-            [
-                item1 - 1/(2*self.sigma2)*item2 + (TWOPI)**(1/2-self.q)*(item3 + item4 + item5) 
-                for item1, item2, item3, item4, item5 in zip(self.a1, self.a2, self.a3, self.a4, self.a5)
-            ]
-        )
+        # add all of the terms together
+        total = np.sum(global_terms) - 1/(2*self.sigma2)*(np.sum(self.omega_plus_terms) + np.sum(self.omega_minus_terms))
 
         return total + scalars
 
@@ -378,37 +392,64 @@ class Problem:
         """
         
         # update sigma_squared
-        self.sigma2 = 1/(self.N*self.p)*sum([item2 + (TWOPI)**(1/2-self.q)*(item3+item4+item5) for item2, item3, item4, item5 in zip(self.a2, self.a3, self.a4, self.a5)])
+        # self.sigma2 = 1/(self.N*self.p)*(TWOPI)**(0.5-self.q)*(np.sum(self.omega_plus_terms) + np.sum(self.omega_minus_terms))
 
         ss = [-mi[-1]*np.sqrt(si[-1]) for mi, si in zip(self.latent_means, self.latent_variances)]
         
         # update the linear transformations B1 and B2
-        to_invertB1_part1 = [self.g1*Sigma*(SQRT_PI_OVER_2*erfc(si/ROOT2) + si*np.exp(-si**2/2)) for Sigma, si in zip(self.latent_Sigmas, ss)]
-        to_invertB1_part2 = [SQRT_PI_OVER_2*np.matmul(mi, mi.T)*erfc(si/ROOT2) for mi, si in zip(self.latent_means, ss)]
-        to_invertB1 = sum([p1 + p2 for p1, p2 in zip(to_invertB1_part1, to_invertB1_part2)])
+        def get_B_terms(plus=True):
+            """ Get the terms involving either B1 or B2, 
+                depending on whether we are in Omega plus
+                or Omega minus
+            """
+            if plus:
+                g = self.g1
+                error_func = lambda x: erfc(x)
+                exp_func = lambda x: np.exp(x)
+                index_set = self.I1
+            else:
+                g = self.g2
+                error_func = lambda x: erf(x) + 1
+                exp_func = lambda x: -np.exp(x)
+                index_set = self.I2
 
-        to_invertB2_part1 = [self.g1*Sigma*(SQRT_PI_OVER_2*(erf(si/ROOT2)+1) - si*np.exp(-si**2/2)) for Sigma, si in zip(self.latent_Sigmas, ss)]
-        to_invertB2_part2 = [SQRT_PI_OVER_2*np.matmul(mi, mi.T)*(erf(si/ROOT2)+1) for mi, si in zip(self.latent_means, ss)]
-        to_invertB2 = sum([p1 + p2 for p1, p2 in zip(to_invertB2_part1, to_invertB2_part2)])
+            to_invert_part1 = [
+                g*self.latent_Sigmas[index]*(SQRT_PI_OVER_2*error_func(ss[index]/ROOT2) + ss[index]*exp_func(-ss[index]**2/2)) for index in index_set
+            ]
+            to_invert_part2 = [SQRT_PI_OVER_2*np.matmul(self.latent_means[index], self.latent_means[index].T)*error_func(ss[index]/ROOT2) for index in index_set]
+            inverted_part = sum([p1 + p2 for p1, p2 in zip(to_invert_part1, to_invert_part2)])
 
-        y_minus_mu_mi = sum(
+            return LA.inv(inverted_part)
+
+        inverted_part_omega_plus = get_B_terms(plus=True)
+        inverted_part_omega_minus = get_B_terms(plus=False)
+
+        y_minus_mu_mi_omega_plus = sum(
             [
                 np.matmul(
-                    (yi - self.mu).reshape(-1, 1),
-                    mi.T
-                ) for yi, mi in zip(self.Y, self.latent_means)
+                    (self.coords[index] - self.mu).reshape(-1, 1),
+                    self.latent_means[index].T
+                ) for index in self.I1
             ]
         )
-
-        inverted_part_B1 = LA.inv(to_invertB1)
-        inverted_part_B2 = LA.inv(to_invertB2)
+        y_minus_mu_mi_omega_minus = sum(
+            [
+                np.matmul(
+                    (self.coords[index] - self.mu).reshape(-1, 1),
+                    self.latent_means[index].T
+                ) for index in self.I2
+            ]
+        )
         
-        self.B1 = 1/(2*(TWOPI)**(1/2-self.q))*np.matmul(y_minus_mu_mi, inverted_part_B1)
-        self.B2 = 1/(2*(TWOPI)**(1/2-self.q))*np.matmul(y_minus_mu_mi, inverted_part_B2)
+        self.B1 = 1/(2*(TWOPI)**(1/2-self.q))*np.matmul(y_minus_mu_mi_omega_plus, inverted_part_omega_plus)
+        self.B2 = 1/(2*(TWOPI)**(1/2-self.q))*np.matmul(y_minus_mu_mi_omega_minus, inverted_part_omega_minus)
 
         # optimize latent parameters using Method of Moving Asymptotes
         # self.optimize_means()
         # self.optimize_Sigma()
+        print('You are here')
+
+        # TODO: Split up latent mean optimization based on Omega plus, Omega minus
 
         # optimize latent parameters using gradient ascent
         # TODO: get progress bar working for gradient ascent
@@ -455,10 +496,16 @@ class Problem:
             # self.latent_Sigmas[index] = Si_new.reshape(self.q, self.q)
 
     def optimize_model(self):
-        """ Perform the EM algorithm over the model parameters B1, B2, and sigma2 """
+        """ Perform the EM algorithm over the model parameters B1, B2, and sigma2 
+            and latent means and covariance matrices
+        """
 
+        # keep track of loglikelihood
         L_new = self.loglikelihood()
         L_old = 0
+
+        self._loglik_results = [L_new]
+        count = 0
 
         # keep performing EM until the change in loglikelihood is less than the tolerance
         print('Optimizing model parameters using the EM algorithm...')
@@ -467,10 +514,15 @@ class Problem:
             
             # update the model parameters
             self.M_step()
+            count += 1
+            print("\r{}".format(count))
             
             L_new = self.loglikelihood()
+            self._loglik_results.append(L_new)
 
         self.loglik = L_new
+        self._loglik_results.append(L_new)
+
         print('Optimal parameters reached.')
         print('Log-likelihood at the optimum: {}'.format(self.loglik))
         
@@ -486,7 +538,7 @@ class Problem:
     def plot_result(self):
         """ Plot the latent means transformed through B1 and B2 """
 
-        self.ax = plt.axes(projection='3d')       
+        ax1 = plt.axes(projection='3d')       
 
         # extract the individual axis coordinates
         self.x = self.coords[:, 0]
@@ -494,7 +546,7 @@ class Problem:
         self.z = self.coords[:, 2]
 
         # first plot the latent points in Omega_plus
-        self.ax.scatter3D(self.x, self.y, self.z, color='red')
+        ax1.scatter3D(self.x, self.y, self.z, color='red')
 
         # plot the latent points in Omega_minus
         self.result_x1 = [row[:, 0] for row in self.W1]
@@ -504,24 +556,24 @@ class Problem:
         self.result_x2 = [row[:, 0] for row in self.W2]
         self.result_y2 = [row[:, 1] for row in self.W2]
         self.result_z2 = [row[:, 2] for row in self.W2]
-        self.ax.scatter3D(self.result_x1, self.result_y1, self.result_z1, color='blue')
-        self.ax.scatter3D(self.result_x2, self.result_y2, self.result_z2, color='black')
+        ax1.scatter3D(self.result_x1, self.result_y1, self.result_z1, color='blue')
+        ax1.scatter3D(self.result_x2, self.result_y2, self.result_z2, color='black')
+
+        ax2 = plt.axes(projection='3d')
 
         plt.show()
 
 if __name__ == '__main__':
     
-    p = Problem(n_obs=33, data_type='mixture', latent_dimension=2, tolerance=1e-2)  
+    p = Problem(n_obs=101, data_type='mixture', latent_dimension=2, tolerance=1e-2)  
     
     print(p)
     
     p.optimize_model()
-    # # p.optimize_means()
-    # # p.optimize_Sigma()
+    # # # p.optimize_means()
+    # # # p.optimize_Sigma()
     
-    # # print(p.latent_Sigmas[1])
-    # # print(p.latent_means[1])
+    # # # print(p.latent_Sigmas[1])
+    # # # print(p.latent_means[1])
     p.get_result()
-    print(p.W1)
-    print(p.W2)
     p.plot_result()
