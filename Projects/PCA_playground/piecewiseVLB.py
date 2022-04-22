@@ -108,8 +108,25 @@ class Problem:
         result += 'Model parameters\n\n'
         result += 'Number of observations: {}\nData dimensions: {}\nLatent dimensions: {}\n'.format(self.N, self.p, self.q)
         result += 'Initial Log-likelihood: {}'.format(self.loglik)
+        result += 'Initial sigma_2: {}'.format(self.sigma2)
 
         return result
+
+    def plot(self):
+        """ Plot the dataset """
+        plt.figure()
+
+        ax1 = plt.axes(projection='3d')       
+
+        # extract the individual axis coordinates
+        self.x = self.coords[:, 0]
+        self.y = self.coords[:, 1]
+        self.z = self.coords[:, 2]
+
+        # first plot the latent points in Omega_plus
+        ax1.scatter3D(self.x, self.y, self.z, color='red')
+
+        plt.show()
 
     def loglikelihood(self):
         """ Compute the log-likelihood function.
@@ -127,7 +144,7 @@ class Problem:
         miTmi = [sum(mi**2)**2 for mi in self.latent_means]
         yi_minus_mu_quadratic = [np.sum(yi-self.mu)**2/self.sigma2 for yi in self.coords]
 
-        global_terms = [0.5*(-tr - mi_norm + np.log(det) + y_quad) for tr, det, mi_norm, y_quad in zip(traces, determinants, miTmi, yi_minus_mu_quadratic)]
+        global_terms = [0.5*(-tr - mi_norm + np.log(det) - y_quad) for tr, det, mi_norm, y_quad in zip(traces, determinants, miTmi, yi_minus_mu_quadratic)]
 
         # now for the terms in Omega_plus
         # update the index sets
@@ -182,7 +199,7 @@ class Problem:
                 )*SQRT_PI_OVER_2*error_func(ss[index]/ROOT2) for index in index_set
             ]
             _terms = [
-                item1 + TWOPI**(0.5-self.q)*(item2*item3 + item4) for item1, item2, item3, item4 in zip(
+                (-1/(2*self.sigma2))*(item1 + TWOPI**(0.5-self.q)*(item2*item3 + item4)) for item1, item2, item3, item4 in zip(
                     _yi_terms,
                     _g_terms,
                     _trace_terms,
@@ -196,10 +213,10 @@ class Problem:
         self.omega_minus_terms = get_omega_terms(plus=False)
 
         # finally, compute the scalars that are independent of the data and latent variables
-        scalars = self.N*self.q/2 - self.N*self.p/2*np.log(TWOPI*self.sigma2)
+        scalars = self.N*self.q/2 - self.N*self.p*np.log(TWOPI*self.sigma2)/2
 
         # add all of the terms together
-        total = np.sum(global_terms) - 1/(2*self.sigma2)*(np.sum(self.omega_plus_terms) + np.sum(self.omega_minus_terms))
+        total = np.sum(global_terms) + (np.sum(self.omega_plus_terms) + np.sum(self.omega_minus_terms))
 
         return total + scalars
 
@@ -390,10 +407,6 @@ class Problem:
 
             This comprises the M-step of the EM algorithm.
         """
-        
-        # update sigma_squared
-        # self.sigma2 = 1/(self.N*self.p)*(TWOPI)**(0.5-self.q)*(np.sum(self.omega_plus_terms) + np.sum(self.omega_minus_terms))
-
         ss = [-mi[-1]*np.sqrt(si[-1]) for mi, si in zip(self.latent_means, self.latent_variances)]
         
         # update the linear transformations B1 and B2
@@ -424,25 +437,30 @@ class Problem:
         inverted_part_omega_plus = get_B_terms(plus=True)
         inverted_part_omega_minus = get_B_terms(plus=False)
 
+        _y_minus_mu_mi_terms = [
+            np.matmul(
+                (yi - self.mu).reshape(-1, 1),
+                mi.T
+            ) for yi, mi in zip(self.coords, self.latent_means)
+        ]
         y_minus_mu_mi_omega_plus = sum(
             [
-                np.matmul(
-                    (self.coords[index] - self.mu).reshape(-1, 1),
-                    self.latent_means[index].T
-                ) for index in self.I1
+                _y_minus_mu_mi_terms[index] for index in self.I1
             ]
         )
         y_minus_mu_mi_omega_minus = sum(
             [
-                np.matmul(
-                    (self.coords[index] - self.mu).reshape(-1, 1),
-                    self.latent_means[index].T
-                ) for index in self.I2
+                _y_minus_mu_mi_terms[index] for index in self.I2
             ]
         )
+
+        _scalar_constant = (2*TWOPI)**(self.q - 0.5)
         
-        self.B1 = 1/(2*(TWOPI)**(1/2-self.q))*np.matmul(y_minus_mu_mi_omega_plus, inverted_part_omega_plus)
-        self.B2 = 1/(2*(TWOPI)**(1/2-self.q))*np.matmul(y_minus_mu_mi_omega_minus, inverted_part_omega_minus)
+        self.B1 = _scalar_constant*np.matmul(y_minus_mu_mi_omega_plus, inverted_part_omega_plus)
+        self.B2 = _scalar_constant*np.matmul(y_minus_mu_mi_omega_minus, inverted_part_omega_minus)
+
+        # update sigma_squared
+        self.sigma2 = (1/(self.N*self.p))*((TWOPI)**(0.5-self.q))*(np.sum(self.omega_plus_terms) + np.sum(self.omega_minus_terms))
 
         # optimize latent parameters using Method of Moving Asymptotes
         # self.optimize_means()
@@ -568,12 +586,9 @@ if __name__ == '__main__':
     p = Problem(n_obs=101, data_type='mixture', latent_dimension=2, tolerance=1e-2)  
     
     print(p)
+    p.plot()
     
-    p.optimize_model()
-    # # # p.optimize_means()
-    # # # p.optimize_Sigma()
+    # p.optimize_model()
     
-    # # # print(p.latent_Sigmas[1])
-    # # # print(p.latent_means[1])
-    p.get_result()
-    p.plot_result()
+    # p.get_result()
+    # p.plot_result()
