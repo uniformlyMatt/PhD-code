@@ -225,6 +225,7 @@ class Problem:
             the latent covariance matrix Sigma.
         """
 
+        # TODO: calculate gradient over the correct index set
         if gradient_Sigma.size > 0:
             gradient_Sigma[:] = self.gradient_wrt_latent_Sigma(Si=Sigma)
 
@@ -233,12 +234,13 @@ class Problem:
         loglik = self.loglikelihood()
         return loglik
 
-    def gradient_wrt_latent_Sigma(self, Si):
+    def gradient_wrt_latent_Sigma_omega_plus(self, Si):
         """ Computes the gradient of the loglikelihood with 
-            respect to a single latent covariance matrix.
+            respect to a single latent covariance matrix
+            over the index set corresponding to Omega plus.
         """
         # extract the square root of the q,q element from the covariance matrix while it's still flattened
-        s = np.sqrt(Si[-1])       
+        s_iq = np.sqrt(Si[-1])
 
         # reshape the latent covariance matrix from a flat vector to a matrix
         Si = Si.reshape(self.q, self.q)
@@ -247,25 +249,60 @@ class Problem:
         Si_inverse = np.diag(1/np.diag(Si))
 
         mi = self.latent_means[self.index]
-        si = -mi[-1]*s
+        delta_i = -mi[-1]*s_iq
 
         scalars = -0.5*(np.eye(self.q) + Si_inverse)
 
-        # derivative of scalar si wrt Sigma_i
-        dsdSi = np.zeros((self.q, self.q))
-        dsdSi[-1][-1] = -0.5*mi[-1]/s
+        # derivative of scalar delta_i wrt Sigma_i
+        ddelta_idSi = np.zeros((self.q, self.q))
+        ddelta_idSi[-1][-1] = -0.5*mi[-1]/s_iq
 
         # precompute some of the required terms involving B1, B2
         B1TB1 = np.matmul(self.B1.T, self.B1)
-        B2TB2 = np.matmul(self.B2.T, self.B2)
-        B1TB1_minus_B2TB2 = B1TB1 - B2TB2
 
-        inner_exp_terms = np.exp(-si**2/2)*(
-            si*(B1TB1_minus_B2TB2) + \
-            dsdSi*(si**2*(np.trace(np.matmul(B2TB2, Si)) - np.trace(np.matmul(B1TB1, Si))) - np.matmul(np.matmul(mi.T, B1TB1_minus_B2TB2), mi))
+        inner_exp_terms = np.exp(-delta_i**2/2)*(
+            delta_i*B1TB1 - \
+            ddelta_idSi*(delta_i**2*(np.trace(np.matmul(B1TB1, Si)) + np.matmul(np.matmul(mi.T, B1TB1), mi)))
         )
 
-        inner_erf_terms = SQRT_PI_OVER_2*erfc(si/ROOT2)*B1TB1 + (SQRT_PI_OVER_2*erf(si/ROOT2)+1)*B2TB2
+        inner_erf_terms = SQRT_PI_OVER_2*erfc(delta_i/ROOT2)*B1TB1
+
+        result = scalars - 1/(2*self.sigma2)*TWOPI**(1/2-self.q)*(inner_exp_terms + inner_erf_terms)
+
+        return result.ravel()
+
+    def gradient_wrt_latent_Sigma_omega_minus(self, Si):
+        """ Computes the gradient of the loglikelihood with 
+            respect to a single latent covariance matrix
+            over the index set corresponding to Omega minus.
+        """
+        # extract the square root of the q,q element from the covariance matrix while it's still flattened
+        s_iq = np.sqrt(Si[-1])
+
+        # reshape the latent covariance matrix from a flat vector to a matrix
+        Si = Si.reshape(self.q, self.q)
+
+        # since Si is a diagonal matrix, we know the inverse is just the reciprocal
+        Si_inverse = np.diag(1/np.diag(Si))
+
+        mi = self.latent_means[self.index]
+        delta_i = -mi[-1]*s_iq
+
+        scalars = -0.5*(np.eye(self.q) + Si_inverse)
+
+        # derivative of scalar delta_i wrt Sigma_i
+        ddelta_idSi = np.zeros((self.q, self.q))
+        ddelta_idSi[-1][-1] = -0.5*mi[-1]/s_iq
+
+        # precompute some of the required terms involving B1, B2
+        B2TB2 = np.matmul(self.B2.T, self.B2)
+
+        inner_exp_terms = np.exp(-delta_i**2/2)*(
+            delta_i*B2TB2 - \
+            ddelta_idSi*(delta_i**2*(np.trace(np.matmul(B2TB2, Si)) + np.matmul(np.matmul(mi.T, B2TB2), mi)))
+        )
+
+        inner_erf_terms = SQRT_PI_OVER_2*(erfc(delta_i/ROOT2)+1)*B2TB2
 
         result = scalars - 1/(2*self.sigma2)*TWOPI**(1/2-self.q)*(inner_exp_terms + inner_erf_terms)
 
@@ -497,6 +534,12 @@ class Problem:
             self.latent_means[index] = mi_new.reshape(-1, 1)
 
             # now work on the latent Sigmas
+            # find out if the index is in either of the Omega plus or Omega minus index sets
+            if self.index in self.I1:
+                # 
+                pass
+            elif self.index in self.I2:
+                pass
             loglik_old = self.LL_Sigma(Si, gradient_Sigma=np.empty(0))
 
             Si_old = Si.flatten()
@@ -583,7 +626,7 @@ class Problem:
 
 if __name__ == '__main__':
     
-    p = Problem(n_obs=101, data_type='mixture', latent_dimension=2, tolerance=1e-2)  
+    p = Problem(n_obs=101, data_type='hinge', latent_dimension=2, tolerance=1e-2)  
     
     print(p)
     p.plot()

@@ -10,22 +10,10 @@ class DemoData:
         self.mean = mean
         self.covariance = covariance
 
-        # construct the rotation matrix
-        # self.rotation_matrix = [
-        #     [np.cos(beta)*np.cos(gamma), np.sin(alpha)*np.sin(beta)*np.cos(gamma)-np.cos(alpha)*np.sin(gamma), np.cos(alpha)*np.sin(beta)*np.cos(gamma)+np.sin(alpha)*np.sin(gamma)],
-        #     [np.cos(beta)*np.sin(gamma), np.sin(alpha)*np.sin(beta)*np.cos(gamma)+np.cos(alpha)*np.sin(gamma), np.cos(alpha)*np.sin(beta)*np.cos(gamma)-np.sin(alpha)*np.sin(gamma)],
-        #     [-np.sin(beta), np.sin(alpha)*np.cos(beta), np.cos(alpha)*np.cos(beta)]
-        # ]
-        # self.rotation_matrix = [
-        #     [np.cos(beta)*np.cos(alpha), np.cos(beta)*np.sin(alpha), np.sin(beta)],
-        #     [-np.cos(gamma)*np.sin(alpha), np.cos(gamma)*np.cos(alpha), 0],
-        #     [np.sin(gamma)*np.sin(alpha)-np.cos(gamma)*np.sin(beta)*np.cos(alpha), -np.sin(gamma)*np.cos(alpha)-np.cos(gamma)*np.sin(beta)*np.sin(alpha), np.cos(gamma)*np.cos(beta)]
-        # ]
-        # self.rotation_vector = np.random.rand(3)
+        # rotate by beta degrees about a random rotation vector
         self.rotation_vector = np.random.randint(low=0, high=3, size=3)
         self.axis = self.rotation_vector/np.linalg.norm(self.rotation_vector)
 
-        # self.rotation = Rotation.from_matrix(self.rotation_matrix)
         self.rotation = Rotation.from_rotvec(beta*self.axis)
 
         assert self.kind in ['hinge', 'helix', 'mixture']
