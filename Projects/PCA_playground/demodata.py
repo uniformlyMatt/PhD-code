@@ -109,8 +109,8 @@ if __name__ == '__main__':
 
     # helix.rotate()
     # hinge.rotate()
-    planes.rotate()
+    # planes.rotate()
 
     # helix.plot()
     # hinge.plot()
-    planes.plot()
+    # planes.plot()
