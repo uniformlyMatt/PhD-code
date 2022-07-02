@@ -4,113 +4,70 @@ from scipy.spatial.transform import Rotation
 
 class DemoData:
 
-    def __init__(self, kind: str, n_obs: int, mean: np.array, covariance: float, alpha=15., beta=15., gamma=15.):
+    def __init__(self, kind: str, n_obs: int):
         self.kind = kind
         self.n_obs = n_obs
-        self.mean = mean
-        self.covariance = covariance
 
-        # rotate by beta degrees about a random rotation vector
-        self.rotation_vector = np.random.randint(low=0, high=3, size=3)
-        self.axis = self.rotation_vector/np.linalg.norm(self.rotation_vector)
+        assert self.kind in ['example1', 'example2']
 
-        self.rotation = Rotation.from_rotvec(beta*self.axis)
+        if self.kind == 'example1':
+            # create a 2D Gaussian and shift one half down by 4 units
+            self.n_dim = 2
+            self.q = 2
+            self.coords = np.random.normal(0, 1, (self.n_obs, self.q))
+            self.intensity = (2*np.pi)**(-self.q/2)*np.exp(-.5*(self.coords[:, 0]**2 + self.coords[:, 1]**2))
 
-        assert self.kind in ['hinge', 'helix', 'mixture']
+            for point in self.coords:
+                if point[0] >= 0:
+                    point[1] -= 3
+            
+        if self.kind == 'example2':
+            # create a 2D Gaussian and z coords according to 1/x
+            self.n_dim = 3
+            self.q = 2
 
-        if self.kind == 'hinge':
-            # create a 2D Gaussian
-            self.obs = np.random.multivariate_normal(self.mean, self.covariance, self.n_obs)
+            coords = np.random.normal(0, 1, (self.n_obs, self.q))
+            self.intensity = (2*np.pi)**(-self.q/2)*np.exp(-.5*(coords[:, 0]**2 + coords[:, 1]**2))
 
-            # create a bend in the dataset
-            self.obs = [np.append(arr=row, values=np.abs(row[0])) for row in self.obs]
+            z = np.array(
+                [
+                    np.max([np.min([2/x**2, 10]), -10]) for x in coords[:, 0]
+                ]
+            ).reshape(-1, 1)
 
-            # extract the individual coordinates
-            self.x = [item[0] for item in self.obs]
-            self.y = [item[1] for item in self.obs]
-            self.z = [item[2] for item in self.obs]
-
-            # need this for applying a rotation
-            self.coords = np.array([np.array([i, j, k]) for i, j, k in zip(self.x, self.y, self.z)])
-
-        if self.kind == 'helix':
-            # TODO: make these customizable
-            radius = 5
-            slope = 1
-
-            var = np.random.rand()
-
-            # the points along the helix are distributed uniformly along the helix, 
-            # but Gaussian in the cross-section (only x and y need to be Gaussian distributed)
-            self.t = np.linspace(-3*np.pi, 3*np.pi, self.n_obs)
-            self.x = radius*np.cos(self.t) + np.random.normal(0, scale=var, size=self.n_obs)
-            self.y = radius*np.sin(self.t) + np.random.normal(0, scale=var, size=self.n_obs)
-            self.z = slope*self.t + np.random.rand(self.n_obs)
-
-            # need this for applying a rotation
-            self.coords = np.array([np.array([i, j, k]) for i, j, k in zip(self.x, self.y, self.z)])
-
-        if self.kind == 'mixture':
-            # create two 2D Gaussian
-            self.obs1 = np.random.multivariate_normal(self.mean, self.covariance, self.n_obs)
-            self.obs2 = np.random.multivariate_normal(self.mean, self.covariance, self.n_obs)
-
-            self.obs2 *= -1
-
-            z1 = 2*np.random.rand()
-            z2 = -z1
-
-            self.obs = [np.append(arr=row, values=z1) for row in self.obs1]
-            self.obs += [np.append(arr=row, values=z2) for row in self.obs2]
-
-            # extract the individual coordinates
-            self.x = [item[0] for item in self.obs]
-            self.y = [item[1] for item in self.obs]
-            self.z = [item[2] for item in self.obs]
-
-            # need this for applying a rotation
-            self.coords = np.array([np.array([i, j, k]) for i, j, k in zip(self.x, self.y, self.z)])
-
-    def rotate(self):
-        """ Wrapper for the Rotation.from_euler function 
-
-            args:
-            -----
-            :alpha: float
-                rotation about the x axis
-
-            :beta: float
-                rotation about the y axis
-
-            :gamma: float
-                rotation about the z axis
-        """
-        # apply the rotation
-        self.coords = np.array([self.rotation.apply(v) for v in self.coords])
-
-        # extract the individual axis coordinates
-        self.x = self.coords[:, 0]
-        self.y = self.coords[:, 1]
-        self.z = self.coords[:, 2]
-
-    def plot(self):
+            self.coords = np.hstack([coords, z])
+            
+    def plot(self, ax):
         """ Plot the dataset """
-        self.ax = plt.axes(projection='3d')
+        if self.kind == 'example1':
 
-        self.ax.scatter3D(self.x, self.y, self.z, color='red')
-        plt.show()
+            self.x = self.coords[:, 0]
+            self.y = self.coords[:, 1]
+            
+            ax.scatter(self.x, self.y, c=self.intensity)
+            ax.set_aspect('equal')
+        elif self.kind == 'example2':
+            ax = plt.axes(projection='3d')
+
+            self.x = self.coords[:, 0]
+            self.y = self.coords[:, 1]
+            self.z = self.coords[:, 2]
+
+            ax.scatter3D(self.x, self.y, self.z, color='red')
+
+        if __name__ == '__main__':
+            plt.show()
 
 if __name__ == '__main__':
-    cov = np.diag(np.random.randn(2)**2)
 
-    helix = DemoData(kind='helix', n_obs=101, mean=None, covariance=1.1)
-    hinge = DemoData(kind='hinge', n_obs=101, mean=[0, 0], covariance=cov)
-    planes = DemoData(kind='mixture', n_obs=101, mean=[1, 0], covariance=cov)
+    # example1 = DemoData(kind='example1', n_obs=500)
+    # plt.scatter(example1.coords[:,0], example1.coords[:,1], c=example1.intensity)
+    # plt.show()
 
-    # helix.rotate()
-    # hinge.rotate()
-    # planes.rotate()
+    example2 = DemoData(kind='example2', n_obs=500)
 
-    # helix.plot()
-    # hinge.plot()
-    # planes.plot()
+    # print(example2.coords.shape)
+
+    ax = plt.axes(projection='3d')
+    ax.scatter3D(example2.coords[:,0], example2.coords[:,1], example2.coords[:,2])
+    plt.show()
