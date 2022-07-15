@@ -560,4 +560,4 @@ def example(n_obs, data_type, latent_dimension=2):
 
 if __name__ == '__main__':   
     # Examples
-    example(500, 'example1')
+    example(500, 'example2')
