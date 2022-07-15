@@ -554,10 +554,42 @@ def example(n_obs, data_type, latent_dimension=2):
     pca_coords = pca.fit_transform(p.data.coords)
 
     sns.set_theme()
+    print(rho_squared(p))
 
     # now plot piecewise pca and classical PCA
     plot_example(p, pca_coords=pca_coords)
 
+def rho_squared(problem):
+    """ Compute the pseudo R-squared for the model parameters. """
+    logc = np.log(2**(-problem.q - problem.p/2)*np.pi**(1. - problem.q - problem.p/2)*problem.sigma2**(-problem.p/2))
+    L_max = problem.N*logc
+
+    _yiTyi = sum([np.dot(yi.flatten(), yi.flatten()) for yi in problem.Y])
+    L_min = L_max - problem.sigma2/2*_yiTyi
+
+    _to_invert_1 = problem.sigma2*np.eye(problem.p) + np.matmul(problem.B1, problem.B1.T)
+    _to_invert_2 = problem.sigma2*np.eye(problem.p) + np.matmul(problem.B2, problem.B2.T)
+    _C_y1_inv = LA.inv(_to_invert_1)
+    _C_y2_inv = LA.inv(_to_invert_2)
+
+    mu1 = problem.mu1
+    mu2 = problem.mu2
+
+    yi1 = [problem.Y[i].reshape(-1, 1) - mu1 for i in problem.I1]
+    yi2 = [problem.Y[i].reshape(-1, 1) - mu2 for i in problem.I2]
+
+    _yi_terms_1 = sum([np.matmul(np.matmul(x.T, _C_y1_inv), x).item() for x in yi1])
+    _yi_terms_2 = sum([np.matmul(np.matmul(x.T, _C_y2_inv), x).item() for x in yi2])
+    
+    L_model_1 = -0.5*problem.sigma2*_yi_terms_1
+    L_model_2 = -0.5*problem.sigma2*_yi_terms_2
+
+    L_model = L_max + L_model_1 + L_model_2
+
+    _result = (L_model - L_min)/(L_max - L_min)
+
+    return _result
+
 if __name__ == '__main__':   
     # Examples
-    example(500, 'example2')
+    example(500, 'example1')
