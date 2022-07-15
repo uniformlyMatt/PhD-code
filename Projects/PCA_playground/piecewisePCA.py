@@ -1,57 +1,91 @@
-from re import A
 import numpy as np
 import numpy.linalg as LA
 from scipy.special import erf, erfc
 from sklearn.decomposition import PCA
+from pyearth import Earth
 from demodata import DemoData
 from config import *
-
-from alive_progress import alive_bar
 
 import matplotlib.pyplot as plt
 import seaborn as sns
 
 class Problem:
-    def __init__(self, n_obs, data_type='mixture', latent_dimension=2, em_tolerance=1, max_iterations=25):
+    def __init__(self, n_obs, data_type, latent_dimension=2, em_tolerance=1e-3, max_iterations=100):
         self.q = latent_dimension
         self.N = n_obs  # number of observations
 
         # define step size for gradient ascent
         self.step_size = 0.01
 
-        # setup the observations
-        if data_type == 'example1':
-            self.data = DemoData(kind=data_type, n_obs=self.N)
-        elif data_type == 'example2':
-            self.data = DemoData(kind=data_type, n_obs=self.N)
+        self.data = DemoData(kind=data_type, n_obs=self.N)
 
         # get the coordinates from the object
-        self.coords = self.data.coords
+        self.Y = self.data.coords
+        
+        # initialize the latent means using a MARS model
+        X = self.data.X
+        y = self.data.y
 
-        self.p = self.coords.T.shape[0]   # dimension of the observation space
+        # Fit an Earth model
+        model = Earth(max_terms=2)
+        model.fit(X, y)
+            
+        # partition the observations into two sets based on the MARS model knots
+        knot = model.basis_[1].get_knot()
+        var_index = model.basis_[1].get_variable()
+
+        U_index = [i for i, item in enumerate(X) if item[var_index] < knot]
+        V_index = [i for i, item in enumerate(X) if item[var_index] >= knot]
+
+        U = {
+            'coords': np.array([item for item in self.Y if item[var_index] < knot]),
+            'index': [i for i, item in enumerate(self.Y) if item[var_index] < knot]
+        }
+        V = {
+            'coords': np.array([item for item in self.Y if item[var_index] >= knot]),
+            'index': [i for i, item in enumerate(self.Y) if item[var_index] >= knot]
+        }
+
+        # initialize a set of means and standard deviations for the latent variables
+        self.latent_means = [0]*self.N
+
+        for i, item in zip(U['index'], U['coords']):
+            self.latent_means[i] = item[:2].reshape(-1, 1)
+        for i, item in zip(V['index'], V['coords']):
+            self.latent_means[i] = item[:2].reshape(-1, 1)
+
+        # indexes that correspond to the two separate subsets of the latent data
+        # these are initialized based on arbitrary criteria
+        self.I1 = U_index
+        self.I2 = V_index
+
+        self.p = self.Y.T.shape[0]   # dimension of the observation space
         
         # stopping criteria for optimization algorithms
         self.em_tolerance = em_tolerance   # tolerance for the loglikelihood in the EM algorithm
         self.max_iterations = max_iterations
 
         # initialize a set of means and standard deviations for the latent variables
-        self.latent_means = [np.random.randn(self.q, 1) for _ in range(self.N)]
+        # self.latent_means = [np.random.randn(self.q, 1) for _ in range(self.N)]
+
         self.latent_variances = [np.ones(self.q) for _ in range(self.N)]
         self.latent_Sigmas = [np.diag(var) for var in self.latent_variances]
 
         # set starting values for sigma2, mu1, mu2, B_1, B_2
-        self.mu1 = np.ones(shape=(1, self.p))
-        self.mu2 = -np.ones(shape=(1, self.p))
+        # self.mu1 = np.mean(self.Y[self.I1], axis=0).reshape(1, self.p)
+        # self.mu2 = np.mean(self.Y[self.I2], axis=0).reshape(1, self.p)
+        self.mu1 = np.zeros(shape=(self.p, 1))
+        self.mu2 = np.zeros(shape=(self.p, 1))
+
+        # self.mu2 = self.mu1.copy()
         self.sigma2 = np.random.rand()       # set to random positive number
         self.B1 = np.random.randn(self.p, self.q)
         self.B2 = np.random.randn(self.p, self.q)
-
-        # indexes that correspond to the two separate subsets of the latent data
-        self.I1 = [index for index, point in enumerate(self.coords) if point[0].item() >= 0]
-        self.I2 = [index for index, point in enumerate(self.coords) if point[0].item() < 0]
+        # self.B1 = np.zeros((self.p, self.q))
+        # self.B2 = np.zeros((self.p, self.q))
 
         # I want the observations to be 1xp arrays for later computations
-        self.Y = [yi.reshape(1, -1) for yi in self.coords]
+        self.Y = [yi.reshape(1, -1) for yi in self.Y]
 
         # calculate the current loglikelihood
         self.loglik = self.loglikelihood()
@@ -94,8 +128,6 @@ class Problem:
         global_terms = [0.5*(np.log(det) - tr - mi_norm) for tr, det, mi_norm in zip(traces, determinants, miTmi)]
 
         # now for the terms in Omega_plus
-        # update the index sets
-        self.update_index()
 
         def get_omega_terms(plus=True):
             """ Compute the summation terms over Omega plus or Omega minus """
@@ -237,13 +269,13 @@ class Problem:
 
         if self.index in self.I1:
             error_func = lambda x: erfc(x/ROOT2)
-            exp_func = lambda x: np.exp(x)
+            exp_func = lambda x: np.exp(-x**2/2)
             B = self.B1
             mu = self.mu1
             j = 1
         elif self.index in self.I2:
             error_func = lambda x: erf(x) + 1
-            exp_func = lambda x: -np.exp(x)
+            exp_func = lambda x: -np.exp(-x**2/2)
             B = self.B2
             mu = self.mu2
             j = 2
@@ -292,39 +324,25 @@ class Problem:
             resize = lambda x: np.diag(np.diag(x.reshape(self.q, self.q))) # this zeros all off-diagonal elements
 
         # optimize latent parameters using gradient descent
-        # with alive_bar(self.N) as bar:
-        # update each parameter in the 'update_set'
         for index, par in enumerate(update_set):
             self.index = index
 
-            loglik_old = self.loglikelihood()
-
             par_old = par.flatten()
             par_new  = par_old - self.step_size*grad_func(par_old)
-
-            loglik_new = self.loglikelihood()
             
             count1 = 0
-            # update until relative error is less than tolerance
-            while np.abs((loglik_old-loglik_new)/loglik_old) > 0.01:
+            # update until absolute error is less than tolerance
+            while LA.norm(par_old - par_new, 2)**2 > 0.01:
                 par_old = par_new
-                loglik_old = loglik_new.copy()
-
-                par_new = par_old - self.step_size*grad_func(par_old)
-                loglik_new = self.loglikelihood()
+                par_new = par_old + self.step_size*grad_func(par_old)
 
                 count1 += 1
                 if count1 > self.max_iterations:
-                    print('Max iterations reached before tolerance...\n')
+                    # print('Max iterations reached before tolerance...\n')
                     break
-
-                # decrease the step size when we're getting close to a solution
-                # if np.abs(loglik_old-loglik_new) < 2*self.tolerance:
-                #     self.step_size *= .5
                 
             # update the latent parameter with new optimum
             update_set[index] = resize(par_new)
-                # bar()
 
     def M_step(self):
         """ Update the model parameters based on the maximum likelihood estimates 
@@ -410,9 +428,11 @@ class Problem:
         self.sigma2 = (TWOPI**(-0.5)/(self.N*self.p))*(np.sum(self.omega_plus_terms) + np.sum(self.omega_minus_terms))
 
         # optimize variational parameters using gradient descent
-        # print('\nOptimizing variational parameters...')
         self.gradient_descent(indicator='means')
         self.gradient_descent(indicator='covariances')
+
+        # update the index sets
+        self.update_index()
 
     def optimize_model(self):
         """ Perform the EM algorithm over the model parameters B1, B2, and sigma2 
@@ -421,103 +441,36 @@ class Problem:
 
         # keep track of loglikelihood
         current_loglik = self.loglikelihood()
-        previous_loglik = 10*current_loglik
+        previous_loglik = 2*current_loglik
         count = 0
 
         self._loglik_results = [current_loglik]
 
         # keep performing EM until the change in loglikelihood is less than the tolerance
         print('Optimizing model parameters using the EM algorithm...')
-        # for _ in range(20):
         
         while np.abs(current_loglik - previous_loglik) > self.em_tolerance:
             # update the model parameters
             self.M_step()
             
             previous_loglik = current_loglik
+
+            # E-step
             current_loglik = self.loglikelihood()
             self._loglik_results.append(current_loglik)
+
             count += 1
-            print(count)
 
             if count > self.max_iterations:
                 print('Maximum iterations reached...')
                 break
 
         self.loglik = self.loglikelihood()
-        # self._loglik_results.append(self.loglik.copy())
 
         print('Optimal parameters reached in {} iterations.'.format(count+1))
         print('Log-likelihood at the optimum: {}'.format(self.loglik))
-        
-    def get_result(self):
-        """ Estimate the positions of the latent variables """
 
-        self.W1 = [self.latent_means[index] for index in self.I1]
-        self.W2 = [self.latent_means[index] for index in self.I2]
-
-        self.result_x1 = [row[0] for row in self.W1]
-        self.result_y1 = [row[1] for row in self.W1]
-        self.result_z1 = [0]*len(self.W1)
-
-        self.result_x2 = [row[0] for row in self.W2]
-        self.result_y2 = [row[1] for row in self.W2]
-        self.result_z2 = [0]*len(self.W2)
-
-def plot_example1(problem, pca_coords=None):
-    """ Plot the results of the piecewise PCA and compares to
-        regular PCA. 
-        
-        Example 1
-
-        Note: this is only used when latent_dim = 2.
-
-        :args:
-        ------
-        problem: 
-            instance of the Problem class
-
-        pca_coords:
-            results from classical PCA with the observations
-    """
-
-    # reshape the latent means for plotting
-    m = np.vstack([row.reshape(1, -1) for row in problem.latent_means])
-
-    fig, (ax1, ax2, ax3) = plt.subplots(nrows=3, ncols=1, figsize=(6, 15))
-
-    # plot the observations
-    obs1 = problem.coords[problem.I1]
-    obs2 = problem.coords[problem.I2]
-    ax1.scatter(obs1[:, 0], obs1[:, 1], color='#d82f49ff')
-    ax1.scatter(obs2[:, 0], obs2[:, 1], color='#6a2357ff')
-    # problem.data.plot(ax=ax1)
-    ax1.set_title('Observations')
-
-    # plot the latent space - piecewise PCA
-    m1 = m[problem.I1]
-    m2 = m[problem.I2]
-    ax2.scatter(m1[:, 0], m1[:, 1], color='#d82f49ff')
-    ax2.scatter(m2[:, 0], m2[:, 1], color='#6a2357ff')
-    ax2.set_aspect('equal')
-    ax2.set_title('Estimated positions in latent space - piecewise PCA')
-
-    # plot the latent space - classical PCA
-    if pca_coords is not None:
-        x1 = [item[0] for item in pca_coords[problem.I1]]
-        y1 = [item[1] for item in pca_coords[problem.I1]]
-        x2 = [item[0] for item in pca_coords[problem.I2]]
-        y2 = [item[1] for item in pca_coords[problem.I2]]
-
-        ax3.scatter(x1, y1, color='#d82f49ff')
-        ax3.scatter(x2, y2, color='#6a2357ff')
-        ax3.set_aspect('equal')
-        ax3.set_title('Estimated positions in latent space - PCA')
-
-    plt.show()
-    fig.savefig('results/example1_result.png', bbox_inches='tight')
-
-def plot_example2(problem, pca_coords=None):
+def plot_example(problem, pca_coords=None):
     """ Plot the results of the piecewise PCA and compares to
         regular PCA. 
         
@@ -533,10 +486,10 @@ def plot_example2(problem, pca_coords=None):
         pca_coords:
             results from classical PCA with the observations
     """
-    fig1, (ax1, ax2) = plt.subplots(nrows=2, ncols=1, figsize=(6, 12))
+    fig1, (ax1, ax2) = plt.subplots(nrows=1, ncols=2, figsize=(12, 6))
 
-    obs1 = problem.coords[problem.I1]
-    obs2 = problem.coords[problem.I2]
+    obs1 = np.vstack([problem.Y[i] for i in problem.I1])
+    obs2 = np.vstack([problem.Y[i] for i in problem.I2])
 
     x1 = obs1[:, 0]
     y1 = obs1[:, 1]
@@ -551,10 +504,11 @@ def plot_example2(problem, pca_coords=None):
     ax3 = fig2.add_subplot(projection='3d')
     ax3.scatter3D(x1, y1, z1, color='#d82f49ff')
     ax3.scatter3D(x2, y2, z2, color='#6a2357ff')
-    ax3.azim = -80
-    ax3.elev = 16
+    ax3.scatter3D(x1[2], y1[2], z1[2], color='blue', marker='X', s=100)
+    ax3.azim = -177
+    ax3.elev = 34
     ax3.set_title('Observations')
-    fig2.savefig('results/example2_observations.png', bbox_inches='tight')
+    # fig2.savefig('results/example2_observations.png', bbox_inches='tight')
 
     # plot the latent space - piecewise PCA
     # reshape the latent means for plotting
@@ -563,6 +517,7 @@ def plot_example2(problem, pca_coords=None):
     lat2 = m[problem.I2]
     ax1.scatter(lat1[:, 0], lat1[:, 1], color='#d82f49ff')
     ax1.scatter(lat2[:, 0], lat2[:, 1], color='#6a2357ff')
+    ax1.scatter(lat1[2, 0], lat1[2, 1], color='blue', marker='X', s=100)
     ax1.set_aspect('equal')
     ax1.set_title('Estimated positions in latent space - piecewise PCA')
 
@@ -575,65 +530,34 @@ def plot_example2(problem, pca_coords=None):
 
         ax2.scatter(x1, y1, color='#d82f49ff')
         ax2.scatter(x2, y2, color='#6a2357ff')
+        ax2.scatter(x1[2], y1[2], color='blue', marker='X', s=100)
         ax2.set_aspect('equal')
         ax2.set_title('Estimated positions in latent space - PCA')
 
     plt.show()
-    fig1.savefig("results/example2_result.png", bbox_inches='tight')
-
-def distance_to_mean(problem):
-    """ Calculate the distance between the data points and their mean 
-        for both the observations and the points in latent space.
-
-        I want to see if the distances to the mean were conserved.
-    """
-    obs_mean = np.mean(problem.coords, axis=0)
-    result_m = np.vstack([row.reshape(1, -1) for row in problem.latent_means])
-    result_mean = np.mean(result_m, axis=0)
-
-    # compute the distances between points and their mean
-    obs_dist = [np.round(LA.norm(obs - obs_mean, 2)**2, 2) for obs in problem.coords]
-    result_dist = [np.round(LA.norm((point - result_mean)**2, 2)) for point in result_m]
-
-    ax = plt.axes()
-    ax.scatter(obs_dist, result_dist, color='black', marker='o')
-    ax.set_xlabel('Observation distance to empirical mean')
-    ax.set_ylabel('Latent distance to latent mean')
-    # ax.plot(x, result_dist, color='blue')
-    plt.show()
+    # fig1.savefig("results/example2_result.png", bbox_inches='tight')
 
 def example(n_obs, data_type, latent_dimension=2):
     """ Compute Example 1 or 2 """
 
-    p = Problem(n_obs=n_obs, data_type=data_type, latent_dimension=latent_dimension, em_tolerance=1, max_iterations=10)
+    p = Problem(n_obs=n_obs, data_type=data_type, latent_dimension=latent_dimension)
     print(p)
 
     p.optimize_model()
-    print('\nPosterior model mean parameters...')
-    print(p.mu1, p.mu2)
-    print('\nPosterior transformations...')
-    print(p.B1, p.B2)
-
-    # with open('{} - index sets.txt'.format(data_type), 'w') as file:
-    #     file.write(str(p.I1))
-    #     file.write(str(p.I2))
+    # print('\nPosterior model mean parameters...')
+    # print(p.mu1, p.mu2)
+    # print('\nPosterior transformations...')
+    # print(p.B1, p.B2)
 
     # for comparison, let's do classical PCA with the data
     pca = PCA(n_components=2)
-    pca_coords = pca.fit_transform(p.coords)
+    pca_coords = pca.fit_transform(p.data.coords)
 
     sns.set_theme()
-    # distance_to_mean(p)
 
     # now plot piecewise pca and classical PCA
-    if data_type == 'example1':
-        plot_example1(p, pca_coords=pca_coords)
-    elif data_type == 'example2':
-        plot_example2(p, pca_coords=pca_coords)
+    plot_example(p, pca_coords=pca_coords)
 
-if __name__ == '__main__':
-    # Example 1
-    # example(100, 'example1')
-
-    # Example 2
-    example(100, 'example2')
+if __name__ == '__main__':   
+    # Examples
+    example(500, 'example1')
