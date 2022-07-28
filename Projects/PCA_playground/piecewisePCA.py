@@ -3,6 +3,7 @@ import numpy.linalg as LA
 from scipy.special import erf, erfc
 from sklearn.decomposition import PCA
 from pyearth import Earth
+from sklearn.metrics import explained_variance_score
 from demodata import DemoData
 from config import *
 
@@ -50,9 +51,9 @@ class Problem:
         self.latent_means = [0]*self.N
 
         for i, item in zip(U['index'], U['coords']):
-            self.latent_means[i] = item[:2].reshape(-1, 1)
+            self.latent_means[i] = item[:latent_dimension].reshape(-1, 1)
         for i, item in zip(V['index'], V['coords']):
-            self.latent_means[i] = item[:2].reshape(-1, 1)
+            self.latent_means[i] = item[:latent_dimension].reshape(-1, 1)
 
         # indexes that correspond to the two separate subsets of the latent data
         # these are initialized based on arbitrary criteria
@@ -88,7 +89,7 @@ class Problem:
         self.Y = [yi.reshape(1, -1) for yi in self.Y]
 
         # calculate the current loglikelihood
-        self.loglik = self.loglikelihood()
+        self.loglik = self.variational_loglikelihood()
 
     def __str__(self):
         """ Overloading the print function. This presents an informative 
@@ -113,7 +114,7 @@ class Problem:
         self.I1 = [index for index, mi in enumerate(self.latent_means) if mi[-1] >= 0]
         self.I2 = [index for index, mi in enumerate(self.latent_means) if mi[-1] < 0]
 
-    def loglikelihood(self):
+    def variational_loglikelihood(self):
         """ Compute the log-likelihood function.
             Compute the summation terms for the log-likelihood. 
         """
@@ -440,7 +441,7 @@ class Problem:
         """
 
         # keep track of loglikelihood
-        current_loglik = self.loglikelihood()
+        current_loglik = self.variational_loglikelihood()
         previous_loglik = 2*current_loglik
         count = 0
 
@@ -456,7 +457,7 @@ class Problem:
             previous_loglik = current_loglik
 
             # E-step
-            current_loglik = self.loglikelihood()
+            current_loglik = self.variational_loglikelihood()
             self._loglik_results.append(current_loglik)
 
             count += 1
@@ -465,10 +466,55 @@ class Problem:
                 print('Maximum iterations reached...')
                 break
 
-        self.loglik = self.loglikelihood()
+        self.loglik = self.variational_loglikelihood()
 
         print('Optimal parameters reached in {} iterations.'.format(count+1))
         print('Log-likelihood at the optimum: {}'.format(self.loglik))
+
+    def model_log_likelihood(self):
+        """ Compute the model log-likelihood (not the variational one) for the piecewise PCA model. """
+        logc = np.log(2**(-self.q - self.p/2)*np.pi**(1. - self.q - self.p/2)*self.sigma2**(-self.p/2))
+        _const = self.N*logc
+
+        _to_invert_1 = self.sigma2*np.eye(self.p) + np.matmul(self.B1, self.B1.T)
+        _to_invert_2 = self.sigma2*np.eye(self.p) + np.matmul(self.B2, self.B2.T)
+        _C_y1_inv = LA.inv(_to_invert_1)
+        _C_y2_inv = LA.inv(_to_invert_2)
+
+        mu1 = self.mu1
+        mu2 = self.mu2
+
+        yi1 = [self.Y[i].reshape(-1, 1) - mu1 for i in self.I1]
+        yi2 = [self.Y[i].reshape(-1, 1) - mu2 for i in self.I2]
+
+        _yi_terms_1 = sum([np.matmul(np.matmul(x.T, _C_y1_inv), x).item() for x in yi1])
+        _yi_terms_2 = sum([np.matmul(np.matmul(x.T, _C_y2_inv), x).item() for x in yi2])
+        
+        L_model_1 = -0.5*self.sigma2*_yi_terms_1
+        L_model_2 = -0.5*self.sigma2*_yi_terms_2
+
+        _result = _const + L_model_1 + L_model_2
+
+        return _result
+
+    def BIC(self):
+        """ Computes the BIC for the piecewise PCA model. """
+        _result = self.model_log_likelihood() - self.p*self.q*np.log(self.N)
+        return _result
+
+    def rho_squared(self):
+        """ Compute the pseudo R-squared for the model parameters. """
+        logc = np.log(2**(-self.q - self.p/2)*np.pi**(1. - self.q - self.p/2)*self.sigma2**(-self.p/2))
+        L_max = self.N*logc
+
+        _yiTyi = sum([np.dot(yi.flatten(), yi.flatten()) for yi in self.Y])
+        L_min = L_max - self.sigma2/2*_yiTyi
+
+        L_model = self.model_log_likelihood()
+
+        _result = (L_model - L_min)/(L_max - L_min)
+
+        return _result
 
 def plot_example(problem, pca_coords=None):
     """ Plot the results of the piecewise PCA and compares to
@@ -540,7 +586,7 @@ def plot_example(problem, pca_coords=None):
 def example(n_obs, data_type, latent_dimension=2):
     """ Compute Example 1 or 2 """
 
-    p = Problem(n_obs=n_obs, data_type=data_type, latent_dimension=latent_dimension)
+    p = Problem(n_obs=n_obs, data_type=data_type, latent_dimension=latent_dimension, max_iterations=100)
     print(p)
 
     p.optimize_model()
@@ -548,48 +594,34 @@ def example(n_obs, data_type, latent_dimension=2):
     # print(p.mu1, p.mu2)
     # print('\nPosterior transformations...')
     # print(p.B1, p.B2)
+    print("BIC: {}".format(p.BIC()))
+
+    obs1 = np.vstack([p.Y[i] for i in p.I1])
+    obs2 = np.vstack([p.Y[i] for i in p.I2])
+
+    latent_points = np.vstack((obs1, obs2))
+    latent_pca = PCA(n_components=latent_dimension)
+    latent_pca_coords = latent_pca.fit_transform(latent_points)
+
+    explained_rho2 = p.rho_squared()*latent_pca.explained_variance_ratio_
+    
+    print('Total explained variance: {}'.format(sum(explained_rho2)))
+
+    print('Explained variance\n Dim 1: {}\n Dim 2: {}'.format(explained_rho2[0], explained_rho2[1]))
+
+    # plt.scatter(latent_pca_coords[:, 0], latent_pca_coords[:, 1])
+    # plt.show()
 
     # for comparison, let's do classical PCA with the data
-    pca = PCA(n_components=2)
+    pca = PCA(n_components=latent_dimension)
     pca_coords = pca.fit_transform(p.data.coords)
 
     sns.set_theme()
-    print(rho_squared(p))
+    print('Pseudo-R2: {}'.format(p.rho_squared()))
 
     # now plot piecewise pca and classical PCA
     plot_example(p, pca_coords=pca_coords)
 
-def rho_squared(problem):
-    """ Compute the pseudo R-squared for the model parameters. """
-    logc = np.log(2**(-problem.q - problem.p/2)*np.pi**(1. - problem.q - problem.p/2)*problem.sigma2**(-problem.p/2))
-    L_max = problem.N*logc
-
-    _yiTyi = sum([np.dot(yi.flatten(), yi.flatten()) for yi in problem.Y])
-    L_min = L_max - problem.sigma2/2*_yiTyi
-
-    _to_invert_1 = problem.sigma2*np.eye(problem.p) + np.matmul(problem.B1, problem.B1.T)
-    _to_invert_2 = problem.sigma2*np.eye(problem.p) + np.matmul(problem.B2, problem.B2.T)
-    _C_y1_inv = LA.inv(_to_invert_1)
-    _C_y2_inv = LA.inv(_to_invert_2)
-
-    mu1 = problem.mu1
-    mu2 = problem.mu2
-
-    yi1 = [problem.Y[i].reshape(-1, 1) - mu1 for i in problem.I1]
-    yi2 = [problem.Y[i].reshape(-1, 1) - mu2 for i in problem.I2]
-
-    _yi_terms_1 = sum([np.matmul(np.matmul(x.T, _C_y1_inv), x).item() for x in yi1])
-    _yi_terms_2 = sum([np.matmul(np.matmul(x.T, _C_y2_inv), x).item() for x in yi2])
-    
-    L_model_1 = -0.5*problem.sigma2*_yi_terms_1
-    L_model_2 = -0.5*problem.sigma2*_yi_terms_2
-
-    L_model = L_max + L_model_1 + L_model_2
-
-    _result = (L_model - L_min)/(L_max - L_min)
-
-    return _result
-
 if __name__ == '__main__':   
     # Examples
-    example(500, 'example1')
+    example(500, 'example2')
