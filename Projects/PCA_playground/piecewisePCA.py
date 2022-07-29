@@ -11,21 +11,27 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 class Problem:
-    def __init__(self, n_obs, data_type, latent_dimension=2, em_tolerance=1e-3, max_iterations=100):
+    def __init__(self, n_obs, data_type, latent_dimension=2, em_tolerance=1e-3, max_iterations=100, input_data=None):
         self.q = latent_dimension
         self.N = n_obs  # number of observations
 
         # define step size for gradient ascent
         self.step_size = 0.01
 
-        self.data = DemoData(kind=data_type, n_obs=self.N)
+        if data_type in ['example1', 'example2']:
+            self.data = DemoData(kind=data_type, n_obs=self.N)
 
-        # get the coordinates from the object
-        self.Y = self.data.coords
-        
-        # initialize the latent means using a MARS model
-        X = self.data.X
-        y = self.data.y
+            # get the coordinates from the object
+            self.Y = self.data.coords
+            
+            # initialize the latent means using a MARS model
+            X = self.data.X
+            y = self.data.y
+        else:
+            self.Y = np.hstack(input_data)
+
+            X = input_data['X']
+            y = input_data['y']
 
         # Fit an Earth model
         model = Earth(max_terms=2)
