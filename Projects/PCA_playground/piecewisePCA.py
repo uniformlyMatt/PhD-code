@@ -28,7 +28,7 @@ class Problem:
             X = self.data.X
             y = self.data.y
         else:
-            self.Y = np.hstack(input_data)
+            self.Y = np.hstack((input_data['X'], input_data['y']))
 
             X = input_data['X']
             y = input_data['y']
@@ -45,24 +45,24 @@ class Problem:
         V_index = [i for i, item in enumerate(X) if item[var_index] >= knot]
 
         U = {
-            'coords': np.array([item for item in self.Y if item[var_index] < knot]),
-            'index': [i for i, item in enumerate(self.Y) if item[var_index] < knot]
+            'coords': np.array([self.Y[i] for i in U_index]),
+            'index': U_index
         }
         V = {
-            'coords': np.array([item for item in self.Y if item[var_index] >= knot]),
-            'index': [i for i, item in enumerate(self.Y) if item[var_index] >= knot]
+            'coords': np.array([self.Y[i] for i in V_index]),
+            'index': V_index
         }
 
         # initialize a set of means and standard deviations for the latent variables
         self.latent_means = [0]*self.N
 
+        # set the latent means to include the var_index
         for i, item in zip(U['index'], U['coords']):
-            self.latent_means[i] = item[:latent_dimension].reshape(-1, 1)
+            self.latent_means[i] = item[var_index-1:var_index+latent_dimension-1].reshape(-1, 1)
         for i, item in zip(V['index'], V['coords']):
-            self.latent_means[i] = item[:latent_dimension].reshape(-1, 1)
+            self.latent_means[i] = item[var_index-1:var_index+latent_dimension-1].reshape(-1, 1)
 
         # indexes that correspond to the two separate subsets of the latent data
-        # these are initialized based on arbitrary criteria
         self.I1 = U_index
         self.I2 = V_index
 
@@ -72,24 +72,17 @@ class Problem:
         self.em_tolerance = em_tolerance   # tolerance for the loglikelihood in the EM algorithm
         self.max_iterations = max_iterations
 
-        # initialize a set of means and standard deviations for the latent variables
-        # self.latent_means = [np.random.randn(self.q, 1) for _ in range(self.N)]
-
+        # initialize variational covariance matrices
         self.latent_variances = [np.ones(self.q) for _ in range(self.N)]
         self.latent_Sigmas = [np.diag(var) for var in self.latent_variances]
 
         # set starting values for sigma2, mu1, mu2, B_1, B_2
-        # self.mu1 = np.mean(self.Y[self.I1], axis=0).reshape(1, self.p)
-        # self.mu2 = np.mean(self.Y[self.I2], axis=0).reshape(1, self.p)
         self.mu1 = np.zeros(shape=(self.p, 1))
         self.mu2 = np.zeros(shape=(self.p, 1))
 
-        # self.mu2 = self.mu1.copy()
         self.sigma2 = np.random.rand()       # set to random positive number
         self.B1 = np.random.randn(self.p, self.q)
         self.B2 = np.random.randn(self.p, self.q)
-        # self.B1 = np.zeros((self.p, self.q))
-        # self.B2 = np.zeros((self.p, self.q))
 
         # I want the observations to be 1xp arrays for later computations
         self.Y = [yi.reshape(1, -1) for yi in self.Y]
